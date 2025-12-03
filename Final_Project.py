@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import yfinance as yf
+from Tariffs import *
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -20,61 +21,6 @@ grocery_to_import_map = {
     'Vegetables': 'Vegetables'
 }
 
-avg_tariff_to_years = {
-    2000: 0.0210,
-    2001: 0.0211,
-    2002: 0.0216,
-    2003: 0.0196,
-    2004: 0.0179,
-    2005: 0.0175,
-    2006: 0.0170,
-    2007: 0.0155,
-    2008: 0.0158,
-    2009: 0.0171,
-    2010: 0.0166,
-    2011: 0.0167,
-    2012: 0.0167,
-    2013: 0.0167,
-    2014: 0.0169,
-    2015: 0.0169,
-    2016: 0.0165,
-    2017: 0.0166,
-    2018: 0.0159,
-    2019: 0.0158,
-    2020: 0.0152,
-    2021: 0.0148,
-    2022: 0.0154,
-    2023: 0.0150,
-    2024: 0.0250,
-}
-
-tariff_china_to_years = {
-    2000: 0.1467,
-    2001: 0.1411,
-    2002: 0.0772,
-    2003: 0.0648,
-    2004: 0.0596,
-    2005: 0.0487,
-    2006: 0.0425,
-    2007: 0.0507,
-    2008: 0.0447,
-    2009: 0.0394,
-    2010: 0.0465,
-    2011: 0.0599,
-    2012: 0.0599,
-    2013: 0.0599,
-    2014: 0.0474,
-    2015: 0.0452,
-    2016: 0.0354,
-    2017: 0.0383,
-    2018: 0.0339,
-    2019: 0.0253,
-    2020: 0.0247,
-    2021: 0.0231,
-    2022: 0.0220,
-    2023: 0.0217,
-    2024: 0.0330,
-}
 
 def convert_to_dollars(row):
     if row['UOM'] == 'Million $':
@@ -326,18 +272,34 @@ merged_with_tariff = pd.merge(
 
 final_ml_df = merged_with_tariff.dropna(subset=['avg_price'])
 
-tariff_map = {year: val for year, val in avg_tariff_to_years.items() if year != 2025}
-china_tariff_map = {year: val for year, val in tariff_china_to_years.items() if year != 2025}
+# Define country-to-tariff dictionaries
+country_tariff_maps = {
+    'china': tariff_china_to_years,
+    'mexico': tariff_mexico_to_years,
+    'canada': tariff_canada_to_years,
+    'italy': tariff_italy_to_years,
+    'france': tariff_france_to_years,
+    'brazil': tariff_brazil_to_years,
+    'colombia': tariff_colombia_to_years,
+    'vietnam': tariff_vietnam_to_years,
+    'thailand': tariff_thailand_to_years
+}
 
+# Get years
 years = final_ml_df['YearMonth'].dt.year
 
-mask = (years != 2025) & (final_ml_df['Country'] == 'china')
-final_ml_df.loc[mask, 'Tariff'] = final_ml_df['YearMonth'].dt.year.map(tariff_china_to_years).fillna(0)
+# Apply tariffs for all countries (excluding 2025)
+for country, tariff_map in country_tariff_maps.items():
+    mask = (years != 2025) & (final_ml_df['Country'] == country)
+    final_ml_df.loc[mask, 'Tariff'] = final_ml_df.loc[mask, 'YearMonth'].dt.year.map(tariff_map).fillna(0)
 
+mask_other = (years != 2025) & (~final_ml_df['Country'].isin(country_tariff_maps.keys()))
+final_ml_df.loc[mask_other, 'Tariff'] = final_ml_df.loc[mask_other, 'YearMonth'].dt.year.map(avg_tariff_to_years).fillna(0)
 
-
-
+# Save to CSV
 final_ml_df.to_csv("tariff_price_data.csv", index=False)
+
+print(final_ml_df['Country'].unique())
 
 print(final_ml_df['Country'].unique())
 
