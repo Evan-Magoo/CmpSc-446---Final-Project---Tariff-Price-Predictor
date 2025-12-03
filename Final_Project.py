@@ -48,6 +48,34 @@ avg_tariff_to_years = {
     2024: 0.0250,
 }
 
+tariff_china_to_years = {
+    2000: 0.1467,
+    2001: 0.1411,
+    2002: 0.0772,
+    2003: 0.0648,
+    2004: 0.0596,
+    2005: 0.0487,
+    2006: 0.0425,
+    2007: 0.0507,
+    2008: 0.0447,
+    2009: 0.0394,
+    2010: 0.0465,
+    2011: 0.0599,
+    2012: 0.0599,
+    2013: 0.0599,
+    2014: 0.0474,
+    2015: 0.0452,
+    2016: 0.0354,
+    2017: 0.0383,
+    2018: 0.0339,
+    2019: 0.0253,
+    2020: 0.0247,
+    2021: 0.0231,
+    2022: 0.0220,
+    2023: 0.0217,
+    2024: 0.0330,
+}
+
 def convert_to_dollars(row):
     if row['UOM'] == 'Million $':
         return row['FoodValue'] * 1_000_000
@@ -299,9 +327,14 @@ merged_with_tariff = pd.merge(
 final_ml_df = merged_with_tariff.dropna(subset=['avg_price'])
 
 tariff_map = {year: val for year, val in avg_tariff_to_years.items() if year != 2025}
+china_tariff_map = {year: val for year, val in tariff_china_to_years.items() if year != 2025}
 
 years = final_ml_df['YearMonth'].dt.year
-final_ml_df.loc[years != 2025, 'Tariff'] = final_ml_df['YearMonth'].dt.year.map(tariff_map).fillna(0)
+
+mask = (years != 2025) & (final_ml_df['Country'] == 'china')
+final_ml_df.loc[mask, 'Tariff'] = final_ml_df['YearMonth'].dt.year.map(tariff_china_to_years).fillna(0)
+
+
 
 
 final_ml_df.to_csv("tariff_price_data.csv", index=False)

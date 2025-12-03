@@ -4,37 +4,36 @@ import xgboost as xgb
 import itertools
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.impute import SimpleImputer
 
 
-def simulate_category_price_effect(model, df, features, country, new_tariff):
+def simulate_category_price_effect(model, df, features, country, new_tariff, from_year=None):
     df_copy = df.copy()
     df_copy['Country'] = df_copy['Country'].str.strip().str.lower()
 
-    # Set new tariff for the target country in 2025
-    mask = (df_copy['Country'] == country.lower()) & \
-           (df_copy['YearMonthNum'] >= pd.Timestamp('2025-01-01').value // 10**9)
+    # Apply mask
+    mask = df_copy['Country'] == country.lower()
+    if from_year is not None:
+        mask &= (pd.to_datetime(df_copy['YearMonthNum'], unit='s').dt.year >= from_year)
+
     df_copy.loc[mask, 'Tariff'] = new_tariff
 
     # Fill numeric features
-    numeric_features = ['Share', 'Tariff', 'YearMonthNum', 'SP500']
-    for col in numeric_features:
-        if col in df_copy.columns:
-            df_copy[col] = df_copy[col].fillna(0)
+    for col in ['Share', 'Tariff', 'YearMonthNum', 'SP500']:
+        df_copy[col] = df_copy[col].fillna(0)
 
-    # Predict prices
+    # Predict
     df_copy['predicted_price'] = model.predict(df_copy[features])
 
-    # Compute category-level weighted average
-    category_avg = (
-        df_copy
-        .groupby('Category', as_index=False)
-        .apply(lambda x: pd.Series({'predicted_category_price': np.sum(x['predicted_price'] * x['Share']) / np.sum(x['Share'])}))
-        .reset_index(drop=True)
-    )
+    # Weighted category average (fix FutureWarning)
+    category_avg = df_copy.groupby('Category').apply(
+        lambda x: np.sum(x['predicted_price'] * x['Share']) / np.sum(x['Share'])
+    ).reset_index(name='predicted_category_price')
 
     return category_avg
 
@@ -60,7 +59,7 @@ def simulate_tariff(model, df, features, country_tariff_map):
     return df_copy[['Category', 'Country', 'Tariff', 'predicted_price']]
 
 if __name__ == '__main__':
-    final_ml_df = pd.read_csv('../446-Final-Project/tariff_price_data.csv')
+    final_ml_df = pd.read_csv('tariff_price_data.csv')
 
     features = ['Share', 'Tariff', 'YearMonthNum', 'Category', 'Country', 'SP500']
     df = final_ml_df.copy()
@@ -68,50 +67,45 @@ if __name__ == '__main__':
     df['YearMonthNum'] = df['YearMonth'].astype('int64') // 10**9
     df = df.drop(columns=['YearMonth'])
 
-    train = df[df['YearMonthNum'] < pd.Timestamp("2025-01-01").value // 10**9]
-    test  = df[(df['YearMonthNum'] >= pd.Timestamp("2025-01-01").value // 10**9) &
-               (df['YearMonthNum'] < pd.Timestamp("2026-01-01").value // 10**9)]
+    X = df[features]
+    y = df['avg_price']
 
-    X_train = train[features]
-    y_train = train['avg_price']
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.33, random_state=42)
+
+    numeric_features = ['Share', 'Tariff', 'YearMonthNum', 'SP500']
 
     preprocessor = ColumnTransformer(
         transformers=[
-            ('cat', OneHotEncoder(handle_unknown='ignore'), ['Category','Country']),
-            ('num', SimpleImputer(strategy='mean'), ['Share', 'Tariff', 'YearMonthNum', 'SP500'])
+            ('cat', OneHotEncoder(handle_unknown='ignore'), ['Category', 'Country']),
+            ('num', Pipeline([
+                ('imputer', SimpleImputer(strategy='mean')),
+                ('scaler', StandardScaler())  # <-- scale numeric features
+            ]), numeric_features)
         ],
         remainder='passthrough'
     )
 
     model = Pipeline(steps=[
         ('preprocessor', preprocessor),
-        ('regressor', xgb.XGBRegressor(
-            objective="reg:squarederror",
-            n_estimators=100,
-            random_state=42
-        ))
+        ('regressor', LinearRegression())
     ])
 
     model.fit(X_train, y_train)
 
-    X_test = test[features]
-    predicted = model.predict(X_test)
-    test = test.copy()
-    test.loc[:, 'predicted'] = predicted
+    pred_val = model.predict(X_val)
 
-    mae = mean_absolute_error(test['avg_price'], test['predicted'])
-    rmse = np.sqrt(mean_squared_error(test['avg_price'], test['predicted']))
-    r2 = r2_score(test['avg_price'], test['predicted'])
+    mae = mean_absolute_error(y_val, pred_val)
+    rmse = np.sqrt(mean_squared_error(y_val, pred_val))
+    r2 = r2_score(y_val, pred_val)
 
     print("MAE:", mae)
     print("RMSE:", rmse)
     print("R² Score:", r2)
 
-    category_effect = simulate_category_price_effect(model, test, features, 'china', 100)
-    print('\nChina Tariff = 1000')
-    print(category_effect)
+    test = X_val.copy()
+    test['avg_price'] = y_val
 
-
-    category_effect = simulate_category_price_effect(model, test, features, 'china', 500)
-    print('\nChina Tariff = 500')
-    print(category_effect)
+    for tariff in [0, 1, 10]:
+        category_effect = simulate_category_price_effect(model, test, features, 'china', tariff)
+        print(f'\nChina Tariff = {tariff}')
+        print(category_effect)
